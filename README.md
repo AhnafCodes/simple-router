@@ -5,7 +5,7 @@ Sample JavaScript router based web components. The detailed guide can be found a
 
 ## Running the code
 
-Start any http-server inside the code folder then access it through the localhost. For Node JS you can install the http-server module globally so that you should be getting the server in you command line.
+Start any http-server inside the code folder then access it through localhost. For Node.js you can install the http-server module globally so that the server is available in your command line.
 
 ```
 npm install -g http-server

@@ -6,19 +6,21 @@ function segmentize(uri) {
 /**
  * The url matching function. Pass the route definitions and url to the match
  * and the method will return the matched definition or null if there is no
- * fallback scnario found is the definisions.
+ * fallback scenario found in the definitions.
  *
  * Code is extracted from Reach router path match implementation
  * https://github.com/reach/router/blob/master/src/lib/utils.js
  *
- * @param {Array} routes - Route defenitions
+ * @param {Array} routes - Route definitions
  * @param {string} uri - Url to match
  */
 export function match(routes, uri) {
-  let match;
+  let matched;
   const [uriPathname] = uri.split("?");
   const uriSegments = segmentize(uriPathname);
-  const isRootUri = uriSegments[0] === "/";
+  // True for the root URL ("/"). segmentize strips slashes, so an empty
+  // first segment (and only one) indicates root.
+  const isRootUri = uriSegments.length === 1 && uriSegments[0] === "";
   for (let i = 0; i < routes.length; i++) {
     const route = routes[i];
     const routeSegments = segmentize(route.path);
@@ -56,7 +58,7 @@ export function match(routes, uri) {
     }
 
     if (!missed) {
-      match = {
+      matched = {
         params,
         ...route
       };
@@ -64,5 +66,5 @@ export function match(routes, uri) {
     }
   }
 
-  return match || null;
+  return matched || null;
 }
