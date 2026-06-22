@@ -1,7 +1,7 @@
 import { userList } from "./userlist.js";
 
 export default class UserDetails extends HTMLElement {
-  static observedAttributes() {
+  static get observedAttributes() {
     return ["id"];
   }
 

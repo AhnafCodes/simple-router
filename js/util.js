@@ -18,7 +18,9 @@ export function match(routes, uri) {
   let match;
   const [uriPathname] = uri.split("?");
   const uriSegments = segmentize(uriPathname);
-  const isRootUri = uriSegments[0] === "/";
+  // True for the root URL ("/"). segmentize strips slashes, so an empty
+  // first segment (and only one) indicates root.
+  const isRootUri = uriSegments.length === 1 && uriSegments[0] === "";
   for (let i = 0; i < routes.length; i++) {
     const route = routes[i];
     const routeSegments = segmentize(route.path);

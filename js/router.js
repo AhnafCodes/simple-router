@@ -41,7 +41,9 @@ export default class Router extends HTMLElement {
 
   connectedCallback() {
     this.updateLinks();
-    this.navigate(window.location.pathname);
+    // Initial render: the browser already has a history entry for this URL,
+    // so render in place rather than pushing a duplicate.
+    this.render(window.location.pathname);
 
     window.addEventListener("popstate", this._handlePopstate);
   }
@@ -51,7 +53,8 @@ export default class Router extends HTMLElement {
   }
 
   _handlePopstate = () => {
-    this.navigate(window.location.pathname);
+    // History already moved; just re-render without pushing a new entry.
+    this.render(window.location.pathname);
   };
 
   updateLinks() {
@@ -73,12 +76,26 @@ export default class Router extends HTMLElement {
   }
 
   navigate(url) {
+    // Skip if we're already on this URL to avoid duplicate history entries.
+    if (url === window.location.pathname) return;
+    if (this.render(url)) {
+      window.history.pushState(null, null, url);
+    }
+  }
+
+  /**
+   * Match the url against the registered routes and update the DOM.
+   * Returns true when a route matched, false otherwise. This does not
+   * touch the history stack, so it is safe to call from popstate.
+   */
+  render(url) {
     const matchedRoute = match(this.routes, url);
     if (matchedRoute !== null) {
       this.activeRoute = matchedRoute;
-      window.history.pushState(null, null, url);
       this.update();
+      return true;
     }
+    return false;
   }
 
   /**
