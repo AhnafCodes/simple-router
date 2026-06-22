@@ -57,6 +57,18 @@ export default class Router extends HTMLElement {
   }
 
   _handleLinkClick = e => {
+    // Let the browser handle modified / non-primary clicks (open in new
+    // tab/window, download, etc.) since the links have real href values.
+    if (
+      e.defaultPrevented ||
+      e.button !== 0 ||
+      e.metaKey ||
+      e.ctrlKey ||
+      e.shiftKey ||
+      e.altKey
+    ) {
+      return;
+    }
     const link = e.target.closest("a[route]");
     if (!link || !this.contains(link)) return;
     e.preventDefault();
@@ -115,34 +127,48 @@ export default class Router extends HTMLElement {
       resourceUrl = null
     } = this.activeRoute;
 
-    if (component) {
-      // Remove all child nodes under outlet element
-      while (this.outlet.firstChild) {
-        this.outlet.removeChild(this.outlet.firstChild);
+    if (!component) return;
+
+    const outlet = this.outlet;
+    if (!outlet) {
+      console.warn("wc-router: no <wc-outlet> element found; cannot render view.");
+      return;
+    }
+
+    // Remove all child nodes under outlet element
+    while (outlet.firstChild) {
+      outlet.removeChild(outlet.firstChild);
+    }
+
+    const updateView = () => {
+      const view = document.createElement(component);
+      document.title = title || document.title;
+      for (let key in params) {
+        /**
+         * all dynamic param value will be passed
+         * as the attribute to the newly created element
+         * except * value.
+         */
+        if (key !== "*") view.setAttribute(key, params[key]);
       }
 
-      const updateView = () => {
-        const view = document.createElement(component);
-        document.title = title || document.title;
-        for (let key in params) {
-          /**
-           * all dynamic param value will be passed
-           * as the attribute to the newly created element
-           * except * value.
-           */
-          if (key !== "*") view.setAttribute(key, params[key]);
-        }
+      outlet.appendChild(view);
+      // Update the route links once the DOM is updated
+      this.updateLinks();
+    };
 
-        this.outlet.appendChild(view);
-        // Update the route links once the DOM is updated
-        this.updateLinks();
-      };
-
-      if (resourceUrl !== null) {
-        import(resourceUrl).then(updateView);
-      } else {
-        updateView();
-      }
+    if (resourceUrl !== null) {
+      import(resourceUrl)
+        .then(updateView)
+        .catch(error => {
+          console.error(`wc-router: failed to load "${resourceUrl}"`, error);
+          const message = document.createElement("div");
+          message.className = "page";
+          message.textContent = "Failed to load this page. Please try again.";
+          outlet.appendChild(message);
+        });
+    } else {
+      updateView();
     }
   }
 

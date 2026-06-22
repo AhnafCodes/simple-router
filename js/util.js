@@ -3,6 +3,19 @@ let paramRe = /^:(.+)/;
 function segmentize(uri) {
   return uri.replace(/(^\/+|\/+$)/g, "").split("/");
 }
+
+/**
+ * decodeURIComponent throws a URIError on malformed percent-encoding
+ * (e.g. "/users/%"). Fall back to the raw segment so a bad URL can never
+ * crash route matching.
+ */
+function safeDecode(segment) {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
 /**
  * The url matching function. Pass the route definitions and url to the match
  * and the method will return the matched definition or null if there is no
@@ -36,7 +49,7 @@ export function match(routes, uri) {
       if (fallback) {
         params["*"] = uriSegments
           .slice(index)
-          .map(decodeURIComponent)
+          .map(safeDecode)
           .join("/");
         break;
       }
@@ -49,7 +62,7 @@ export function match(routes, uri) {
       let dynamicMatch = paramRe.exec(routeSegment);
 
       if (dynamicMatch && !isRootUri) {
-        let value = decodeURIComponent(uriSegment);
+        let value = safeDecode(uriSegment);
         params[dynamicMatch[1]] = value;
       } else if (routeSegment !== uriSegment) {
         missed = true;
