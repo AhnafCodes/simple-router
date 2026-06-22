@@ -16,30 +16,33 @@ export default class Router extends HTMLElement {
     return this.querySelector("wc-outlet");
   }
 
-  get root() {
-    return window.location.pathname;
-  }
-
   /**
-   * Get all routes from the direct wc-route child element.
-   * The document title can be updated by providing an
-   * title attribute to the wc-route tag
+   * Read the route definitions from the direct wc-route children.
+   * Routes are static after mount, so this is collected once in
+   * connectedCallback and cached on this._routes.
+   *
+   * The document title can be updated by providing a title attribute
+   * to the wc-route tag.
    */
-  get routes() {
+  collectRoutes() {
     return Array.from(this.querySelectorAll("wc-route"))
       .filter(node => node.parentNode === this)
       .map(r => ({
         path: r.getAttribute("path"),
         // Optional: document title
         title: r.getAttribute("title"),
-        // name of the web component the should be displayed
+        // name of the web component that should be displayed
         component: r.getAttribute("component"),
         // Bundle path if lazy loading the component
-        resourceUrl: r.getAttribute("resourceUrl")
+        resourceUrl: r.getAttribute("resource-url")
       }));
   }
 
   connectedCallback() {
+    this._routes = this.collectRoutes();
+    // Click handling is delegated from the router, so handlers are bound
+    // once here rather than re-bound on every render.
+    this.addEventListener("click", this._handleLinkClick);
     this.updateLinks();
     // Initial render: the browser already has a history entry for this URL,
     // so render in place rather than pushing a duplicate.
@@ -49,8 +52,16 @@ export default class Router extends HTMLElement {
   }
 
   disconnectedCallback() {
+    this.removeEventListener("click", this._handleLinkClick);
     window.removeEventListener("popstate", this._handlePopstate);
   }
+
+  _handleLinkClick = e => {
+    const link = e.target.closest("a[route]");
+    if (!link || !this.contains(link)) return;
+    e.preventDefault();
+    this.navigate(link.getAttribute("route"));
+  };
 
   _handlePopstate = () => {
     // History already moved; just re-render without pushing a new entry.
@@ -59,19 +70,13 @@ export default class Router extends HTMLElement {
 
   updateLinks() {
     /**
-     * Find all child link elements with route attribute to update the
-     * href with route attribute value.
-     *
-     * Add custom click event handler to prevent the default
-     * behaviour and navigate to the registered route onclick.
+     * Mirror the route attribute onto href so links render as real,
+     * navigable anchors (hover, middle-click, open-in-new-tab).
+     * Click handling is delegated from the router, so no per-link
+     * handlers are bound here.
      */
     this.querySelectorAll("a[route]").forEach(link => {
-      const target = link.getAttribute("route");
-      link.setAttribute("href", target);
-      link.onclick = e => {
-        e.preventDefault();
-        this.navigate(target);
-      };
+      link.setAttribute("href", link.getAttribute("route"));
     });
   }
 
@@ -89,7 +94,7 @@ export default class Router extends HTMLElement {
    * touch the history stack, so it is safe to call from popstate.
    */
   render(url) {
-    const matchedRoute = match(this.routes, url);
+    const matchedRoute = match(this._routes, url);
     if (matchedRoute !== null) {
       this.activeRoute = matchedRoute;
       this.update();

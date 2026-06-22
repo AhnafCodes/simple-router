@@ -16,19 +16,24 @@
       <nav class="nav">
         <ul>
           <li><a route="/">Home</a></li>
-          <li><a route="/about/">About</a></li>
-          <li><a route="/contact/">Contact</a></li>
+          <li><a route="/about">About</a></li>
+          <li><a route="/contact">Contact</a></li>
           <li><a route="/users">Users</a></li>
           <li><a route="/misc">Misc</a></li>
         </ul>
       </nav>
       <wc-route path="/" title="Home" component="wc-home"></wc-route>
       <wc-route path="/about" title="About Us" component="wc-about"></wc-route>
+      <!--
+        Contact is the one page loaded lazily, to demonstrate code-splitting
+        via resource-url. The path is resolved relative to router.js (the
+        module that runs the dynamic import), so it works under any base path.
+      -->
       <wc-route
         path="/contact"
         title="Contact Us"
         component="wc-contact"
-        resourceUrl="/js/pages/contact.js"
+        resource-url="./pages/contact.js"
       ></wc-route>
       <wc-route path="/users" title="Users" component="wc-users"></wc-route>
       <wc-route
