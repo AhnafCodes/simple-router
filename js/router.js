@@ -1,5 +1,9 @@
 "use strict";
-import { match } from "./util.js";
+import { matchRoutes } from "./util.js";
+
+// Cap on how many redirects a single navigation may follow before we assume a
+// loop and bail out.
+const MAX_REDIRECTS = 10;
 
 export default class Router extends HTMLElement {
   /**
@@ -21,29 +25,35 @@ export default class Router extends HTMLElement {
   }
 
   /**
-   * Read the route definitions from the direct wc-route children.
-   * Routes are static after mount, so this is collected once in
+   * Read the route definitions from the wc-route children as a tree, so nested
+   * <wc-route> elements become nested routes whose paths are relative to their
+   * parent. Routes are static after mount, so this is built once in
    * connectedCallback and cached on this._routes.
    *
    * The document title can be updated by providing a title attribute
    * to the wc-route tag.
    */
-  collectRoutes() {
-    return Array.from(this.querySelectorAll("wc-route"))
-      .filter(node => node.parentNode === this)
+  buildRouteTree(parent) {
+    return Array.from(parent.children)
+      .filter(node => node.tagName === "WC-ROUTE")
       .map(r => ({
+        // Path relative to the parent route ("" / omitted = index route).
         path: r.getAttribute("path"),
         // Optional: document title
         title: r.getAttribute("title"),
         // name of the web component that should be displayed
         component: r.getAttribute("component"),
         // Bundle path if lazy loading the component
-        resourceUrl: r.getAttribute("resource-url")
+        resourceUrl: r.getAttribute("resource-url"),
+        // Optional: redirect target path (matched routes navigate here instead)
+        redirect: r.getAttribute("redirect"),
+        // Nested routes, rendered into this route's component's <wc-outlet>
+        children: this.buildRouteTree(r)
       }));
   }
 
   connectedCallback() {
-    this._routes = this.collectRoutes();
+    this._routes = this.buildRouteTree(this);
     // Click and prefetch handling are delegated from the router, so handlers
     // are bound once here rather than re-bound on every render. pointerover /
     // focusin are used (not mouseenter / focus) because they bubble.
@@ -98,9 +108,11 @@ export default class Router extends HTMLElement {
   _handlePrefetch = e => {
     const link = e.target.closest("a[route][data-prefetch]");
     if (!link || !this.contains(link)) return;
-    const matched = match(this._routes, link.getAttribute("route"));
-    if (matched && matched.resourceUrl) {
-      this._loadResource(matched.resourceUrl).catch(() => {});
+    const chain = matchRoutes(this._routes, link.getAttribute("route"));
+    if (!chain) return;
+    // Prefetch every lazy module in the chain (layout + nested children).
+    for (const { route } of chain) {
+      if (route.resourceUrl) this._loadResource(route.resourceUrl).catch(() => {});
     }
   };
 
@@ -133,97 +145,153 @@ export default class Router extends HTMLElement {
     });
   }
 
+  /**
+   * Match a url against the route tree, following any redirects, and return
+   * the final { url, chain } to render — or null if nothing matches or a
+   * redirect loop is detected. Pure: touches neither history nor the DOM.
+   */
+  resolve(url, depth = 0) {
+    const chain = matchRoutes(this._routes, url);
+    if (chain === null) return null;
+
+    const leaf = chain[chain.length - 1].route;
+    if (leaf.redirect != null) {
+      if (depth >= MAX_REDIRECTS) {
+        console.error(`wc-router: redirect loop detected at "${url}"`);
+        return null;
+      }
+      return this.resolve(leaf.redirect, depth + 1);
+    }
+
+    return { url, chain };
+  }
+
   navigate(url) {
     // Skip if we're already on this URL to avoid duplicate history entries.
     if (url === window.location.pathname) return;
-    if (this.render(url)) {
-      window.history.pushState(null, null, url);
-    }
+    const resolved = this.resolve(url);
+    if (resolved === null) return;
+    // A redirect may have resolved us back onto the current URL; don't push a
+    // duplicate entry in that case.
+    if (resolved.url === window.location.pathname) return;
+    // Push the final (post-redirect) URL so history never holds the
+    // intermediate redirect source.
+    window.history.pushState(null, null, resolved.url);
+    this._apply(resolved);
   }
 
   /**
-   * Match the url against the registered routes and update the DOM.
-   * Returns true when a route matched, false otherwise. This does not
-   * touch the history stack, so it is safe to call from popstate.
+   * Match the url against the registered routes and update the DOM. Returns
+   * true when a route matched, false otherwise. Used for the initial render
+   * and popstate, so it does not push history — but it will replaceState to
+   * correct the address bar if a redirect changed the URL.
    */
   render(url) {
-    const matchedRoute = match(this._routes, url);
-    if (matchedRoute !== null) {
-      this.activeRoute = matchedRoute;
-      // Record the resolved URL so update() can report it on route-changed.
-      this.activeRoute.url = url;
-      this.update();
-      return true;
+    const resolved = this.resolve(url);
+    if (resolved === null) return false;
+    if (resolved.url !== url) {
+      window.history.replaceState(null, null, resolved.url);
     }
-    return false;
+    this._apply(resolved);
+    return true;
+  }
+
+  _apply(resolved) {
+    this.activeChain = resolved.chain;
+    this.activeUrl = resolved.url;
+    this.update();
   }
 
   /**
-   * Update the DOM under outlet based on the active
-   * selected route.
+   * Render the active route chain into nested outlets: the first route's
+   * component goes in the router's <wc-outlet>, the next renders into that
+   * component's own <wc-outlet>, and so on.
    */
   update() {
-    const {
-      component,
-      title,
-      params = {},
-      resourceUrl = null,
-      path,
-      url
-    } = this.activeRoute;
-
-    if (!component) return;
-
     const outlet = this.outlet;
     if (!outlet) {
       console.warn("wc-router: no <wc-outlet> element found; cannot render view.");
       return;
     }
 
-    // Remove all child nodes under outlet element
+    // Remove all child nodes under the outlet element.
     while (outlet.firstChild) {
       outlet.removeChild(outlet.firstChild);
     }
 
-    const updateView = () => {
-      const view = document.createElement(component);
-      document.title = title || document.title;
+    this._renderChainFrom(this.activeChain, 0, outlet);
+  }
+
+  _renderChainFrom(chain, index, outlet) {
+    if (index >= chain.length) {
+      this._finishRender(chain);
+      return;
+    }
+
+    const { route, params } = chain[index];
+
+    // A route with no component (e.g. a pure grouping route) renders nothing
+    // itself; its children mount into the same outlet.
+    if (!route.component) {
+      this._renderChainFrom(chain, index + 1, outlet);
+      return;
+    }
+
+    const mount = () => {
+      const view = document.createElement(route.component);
+      document.title = route.title || document.title;
       for (let key in params) {
-        /**
-         * all dynamic param value will be passed
-         * as the attribute to the newly created element
-         * except * value.
-         */
+        // Dynamic param values are passed as attributes, except the * capture.
         if (key !== "*") view.setAttribute(key, params[key]);
       }
-
       outlet.appendChild(view);
-      // Update the route links once the DOM is updated
-      this.updateLinks();
-      // Notify listeners (analytics, auth checks, etc.) that the view for the
-      // active route is now mounted. Bubbles so it can be observed from the
-      // router element or from document.
-      this.dispatchEvent(
-        new CustomEvent("route-changed", {
-          bubbles: true,
-          detail: { url, path, title, component, params }
-        })
-      );
+
+      // Descend into this component's own <wc-outlet> for the next level.
+      const nestedOutlet = view.querySelector("wc-outlet");
+      if (index + 1 < chain.length && !nestedOutlet) {
+        console.warn(
+          `wc-router: <${route.component}> has no <wc-outlet>; cannot render nested route.`
+        );
+        this._finishRender(chain);
+        return;
+      }
+      this._renderChainFrom(chain, index + 1, nestedOutlet);
     };
 
-    if (resourceUrl !== null) {
-      this._loadResource(resourceUrl)
-        .then(updateView)
+    if (route.resourceUrl != null) {
+      this._loadResource(route.resourceUrl)
+        .then(mount)
         .catch(error => {
-          console.error(`wc-router: failed to load "${resourceUrl}"`, error);
+          console.error(`wc-router: failed to load "${route.resourceUrl}"`, error);
           const message = document.createElement("div");
           message.className = "page";
           message.textContent = "Failed to load this page. Please try again.";
           outlet.appendChild(message);
         });
     } else {
-      updateView();
+      mount();
     }
+  }
+
+  _finishRender(chain) {
+    // Update the route links once the DOM is updated.
+    this.updateLinks();
+    // Notify listeners (analytics, auth checks, etc.) that the view for the
+    // active route is now mounted. Bubbles so it can be observed from the
+    // router element or from document. Reports the leaf route's details.
+    const { route, params } = chain[chain.length - 1];
+    this.dispatchEvent(
+      new CustomEvent("route-changed", {
+        bubbles: true,
+        detail: {
+          url: this.activeUrl,
+          path: route.path,
+          title: route.title,
+          component: route.component,
+          params
+        }
+      })
+    );
   }
 
   go(url) {
