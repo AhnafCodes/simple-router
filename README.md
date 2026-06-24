@@ -6,7 +6,7 @@ right in your markup with custom tags, in a style similar to `react-router`.
 
 Based on the guide
 [_Declarative Router with Web Components_](https://medium.com/@jasim/declarative-router-with-web-components-43ddcebc9dbc)
-by Jasim. This repository tracks that article's design and fixes a few bugs
+by Jasim. This repository tracks that article's design and further builds on
 present in its code listings (see [Notes](#notes--differences-from-the-guide)).
 
 ## How it works
@@ -24,8 +24,10 @@ custom element registered for that route — all without a full page reload.
 - Wildcard `*` fallback route (404)
 - Browser back/forward support via `popstate`
 - Lazy-loaded routes through ES dynamic `import()`
+- Optional hover/focus prefetching of lazy routes via `data-prefetch`
+- A `route-changed` event for analytics, auth checks, and the like
 - Delegated link handling — drop a `route="..."` attribute on any `<a>`
-- Zero dependencies, ES modules only
+- Zero runtime dependencies, ES modules only
 
 ## Project structure
 
@@ -158,6 +160,49 @@ The path is resolved relative to `router.js` (the module that performs the
 In this repo, `contact.js` is the one page loaded this way; the rest are
 registered eagerly in `js/pages/index.js`.
 
+### Prefetching lazy routes
+
+Lazy routes only fetch their bundle on first visit, so that first navigation
+pays a network round-trip. Add a `data-prefetch` attribute to a link to fetch
+its route's module ahead of time — as soon as the user hovers or
+keyboard-focuses the link:
+
+```html
+<a route="/contact" data-prefetch>Contact</a>
+```
+
+On hover/focus the router resolves the link's route, and if it's lazy
+(`resource-url`) imports the module in the background and caches it. The later
+click then renders instantly with no extra request. Prefetching is best-effort:
+it's a no-op for non-lazy routes, repeated hovers don't re-fetch, and a failed
+prefetch is silent (navigation simply retries the import).
+
+## Listening for route changes
+
+After a view is mounted the router dispatches a bubbling `route-changed`
+`CustomEvent`. Listen on the router element or on `document` — handy for
+analytics, auth checks, scroll handling, etc.:
+
+```js
+document.addEventListener("route-changed", e => {
+  const { url, path, title, component, params } = e.detail;
+  // e.g. send a page view, or redirect if not authenticated
+  console.log("navigated to", url, params);
+});
+```
+
+| `detail` field | Description                                      |
+| -------------- | ------------------------------------------------ |
+| `url`          | The path that was navigated to.                  |
+| `path`         | The matched route's `path` (e.g. `/users/:id`).  |
+| `title`        | The route's `title`, if any.                     |
+| `component`    | Tag name of the rendered component.              |
+| `params`       | Object of captured dynamic params.               |
+
+The event fires for the initial render and every subsequent navigation,
+including back/forward — and, for lazy routes, only once the module has loaded
+and the view is in the DOM.
+
 ## 404 / fallback
 
 A route whose `path` is `*` matches anything not matched earlier. Keep it last:
@@ -183,6 +228,24 @@ http-server
 ```
 
 `index.html` is served at `http://localhost:8080`.
+
+## Testing
+
+A small suite covers the `match()` function and the navigation flow using
+Node's built-in test runner. The only dev dependency is
+[linkedom](https://github.com/webreflection/linkedom), which provides a DOM for
+the navigation tests (the router itself still ships with zero runtime
+dependencies). Requires Node 18+.
+
+```
+npm install
+npm test
+```
+
+- `test/match.test.js` — URL matching: static, dynamic, encoded, and wildcard
+  paths plus edge cases.
+- `test/navigation.test.js` — mounting, navigating, dynamic params, the
+  `route-changed` event, and `data-prefetch` warming the lazy-route cache.
 
 ## Notes / differences from the guide
 

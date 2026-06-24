@@ -17,7 +17,9 @@
         <ul>
           <li><a route="/">Home</a></li>
           <li><a route="/about">About</a></li>
-          <li><a route="/contact">Contact</a></li>
+          <!-- data-prefetch: hovering or focusing this link eagerly loads the
+               lazy /contact bundle so the click renders instantly. -->
+          <li><a route="/contact" data-prefetch>Contact</a></li>
           <li><a route="/users">Users</a></li>
           <li><a route="/misc">Misc</a></li>
         </ul>

@@ -1,0 +1,13 @@
+{
+  "name": "simple-router",
+  "version": "1.0.0",
+  "description": "A tiny vanilla web-components client-side router.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"test/*.test.js\""
+  },
+  "devDependencies": {
+    "linkedom": "^0.18.0"
+  }
+}

@@ -12,6 +12,10 @@ export default class Router extends HTMLElement {
    *  </wc-outlet>
    * </wc-router>
    */
+  // Cache of in-flight / resolved lazy-route imports, keyed by resource-url.
+  // Shared by prefetch and navigation so a hovered route isn't fetched twice.
+  _resources = new Map();
+
   get outlet() {
     return this.querySelector("wc-outlet");
   }
@@ -40,9 +44,12 @@ export default class Router extends HTMLElement {
 
   connectedCallback() {
     this._routes = this.collectRoutes();
-    // Click handling is delegated from the router, so handlers are bound
-    // once here rather than re-bound on every render.
+    // Click and prefetch handling are delegated from the router, so handlers
+    // are bound once here rather than re-bound on every render. pointerover /
+    // focusin are used (not mouseenter / focus) because they bubble.
     this.addEventListener("click", this._handleLinkClick);
+    this.addEventListener("pointerover", this._handlePrefetch);
+    this.addEventListener("focusin", this._handlePrefetch);
     this.updateLinks();
     // Initial render: the browser already has a history entry for this URL,
     // so render in place rather than pushing a duplicate.
@@ -53,6 +60,8 @@ export default class Router extends HTMLElement {
 
   disconnectedCallback() {
     this.removeEventListener("click", this._handleLinkClick);
+    this.removeEventListener("pointerover", this._handlePrefetch);
+    this.removeEventListener("focusin", this._handlePrefetch);
     window.removeEventListener("popstate", this._handlePopstate);
   }
 
@@ -79,6 +88,38 @@ export default class Router extends HTMLElement {
     // History already moved; just re-render without pushing a new entry.
     this.render(window.location.pathname);
   };
+
+  /**
+   * Prefetch a lazy route's bundle when the user signals intent toward it by
+   * hovering or keyboard-focusing a link marked with data-prefetch. Best
+   * effort: only lazy routes (those with a resource-url) have anything to
+   * fetch, and failures are swallowed so navigation can retry later.
+   */
+  _handlePrefetch = e => {
+    const link = e.target.closest("a[route][data-prefetch]");
+    if (!link || !this.contains(link)) return;
+    const matched = match(this._routes, link.getAttribute("route"));
+    if (matched && matched.resourceUrl) {
+      this._loadResource(matched.resourceUrl).catch(() => {});
+    }
+  };
+
+  /**
+   * Import a lazy route's module, caching the promise so a prefetch and the
+   * later navigation share a single import. A failed import is evicted from
+   * the cache so a subsequent attempt can retry rather than reuse the
+   * rejected promise.
+   */
+  _loadResource(url) {
+    if (!this._resources.has(url)) {
+      const p = import(url).catch(error => {
+        this._resources.delete(url);
+        throw error;
+      });
+      this._resources.set(url, p);
+    }
+    return this._resources.get(url);
+  }
 
   updateLinks() {
     /**
@@ -109,6 +150,8 @@ export default class Router extends HTMLElement {
     const matchedRoute = match(this._routes, url);
     if (matchedRoute !== null) {
       this.activeRoute = matchedRoute;
+      // Record the resolved URL so update() can report it on route-changed.
+      this.activeRoute.url = url;
       this.update();
       return true;
     }
@@ -124,7 +167,9 @@ export default class Router extends HTMLElement {
       component,
       title,
       params = {},
-      resourceUrl = null
+      resourceUrl = null,
+      path,
+      url
     } = this.activeRoute;
 
     if (!component) return;
@@ -155,10 +200,19 @@ export default class Router extends HTMLElement {
       outlet.appendChild(view);
       // Update the route links once the DOM is updated
       this.updateLinks();
+      // Notify listeners (analytics, auth checks, etc.) that the view for the
+      // active route is now mounted. Bubbles so it can be observed from the
+      // router element or from document.
+      this.dispatchEvent(
+        new CustomEvent("route-changed", {
+          bubbles: true,
+          detail: { url, path, title, component, params }
+        })
+      );
     };
 
     if (resourceUrl !== null) {
-      import(resourceUrl)
+      this._loadResource(resourceUrl)
         .then(updateView)
         .catch(error => {
           console.error(`wc-router: failed to load "${resourceUrl}"`, error);
