@@ -13,10 +13,15 @@ const { window, document } = dom;
 // History / location stubs. pushState records its calls and updates the
 // fake pathname so navigate()'s "already here" guard behaves like a browser.
 export const pushCalls = [];
+export const replaceCalls = [];
 window.location = { pathname: "/" };
 window.history = {
   pushState: (state, title, url) => {
     pushCalls.push(url);
+    window.location.pathname = url;
+  },
+  replaceState: (state, title, url) => {
+    replaceCalls.push(url);
     window.location.pathname = url;
   },
   go: () => {}
@@ -50,8 +55,13 @@ const ROUTER_MARKUP = `
   <wc-route path="/" title="Home" component="wc-home"></wc-route>
   <wc-route path="/about" title="About Us" component="wc-about"></wc-route>
   <wc-route path="/contact" title="Contact Us" component="wc-contact" resource-url="./pages/contact.js"></wc-route>
-  <wc-route path="/users" title="Users" component="wc-users"></wc-route>
-  <wc-route path="/users/:id" title="User Details" component="wc-userdetails"></wc-route>
+  <wc-route path="/users" title="Users" component="wc-users">
+    <wc-route path="" component="wc-userindex"></wc-route>
+    <wc-route path=":id" title="User Details" component="wc-userdetails"></wc-route>
+  </wc-route>
+  <wc-route path="/misc" redirect="/about"></wc-route>
+  <wc-route path="/loop-a" redirect="/loop-b"></wc-route>
+  <wc-route path="/loop-b" redirect="/loop-a"></wc-route>
   <wc-route path="*" title="404" component="wc-notfound"></wc-route>
   <wc-outlet></wc-outlet>
 `;
@@ -65,6 +75,7 @@ export function mountRouter(initialPath = "/") {
   const existing = document.querySelector("wc-router");
   if (existing) existing.remove();
   pushCalls.length = 0;
+  replaceCalls.length = 0;
   window.location.pathname = initialPath;
 
   const router = document.createElement("wc-router");

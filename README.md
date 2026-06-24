@@ -20,6 +20,9 @@ custom element registered for that route — all without a full page reload.
 ## Features
 
 - Declarative routes via `<wc-route>` custom elements
+- Nested routes with shared layouts and relative child paths
+- Index routes (a default child for a parent's exact path)
+- Redirects via a `redirect` attribute (uses `replaceState`)
 - Dynamic path parameters (e.g. `/users/:id`) passed to the view as attributes
 - Wildcard `*` fallback route (404)
 - Browser back/forward support via `popstate`
@@ -36,13 +39,14 @@ index.html              Markup: route declarations + nav links
 css/style.css           Styling
 js/
   router.js             <wc-router> custom element (the router)
-  util.js               match() — the URL matching function
+  util.js               match() / matchRoutes() — the URL matching functions
   pages/
     index.js            Eagerly registers the page components
     home.js             <wc-home>
     about.js            <wc-about>
     contact.js          <wc-contact>  (loaded lazily, see below)
-    users.js            <wc-users>     — list of users
+    users.js            <wc-users>     — layout: user list + nested <wc-outlet>
+    userindex.js        <wc-userindex> — index child shown at /users
     userdetails.js      <wc-userdetails> — single user, reads :id
     notfound.js         <wc-notfound>  — 404 view
     userlist.js         Sample data
@@ -60,10 +64,14 @@ js/
 
 | Attribute      | Required | Description                                                        |
 | -------------- | -------- | ------------------------------------------------------------------ |
-| `path`         | yes      | URL path to match. Supports `:param` segments and the `*` wildcard. |
-| `component`    | yes      | Tag name of the custom element to render for this route.           |
+| `path`         | yes\*    | URL path to match. Supports `:param` segments and the `*` wildcard. **Relative to the parent route when nested.** Empty/omitted marks an index route. |
+| `component`    | yes\*    | Tag name of the custom element to render for this route.           |
 | `title`        | no       | Sets `document.title` when the route is active.                    |
 | `resource-url` | no       | Module to dynamically `import()` before rendering (lazy loading).  |
+| `redirect`     | no       | Redirect to this path instead of rendering (see [Redirects](#redirects)). A redirect route needs no `component`. |
+
+> \* A redirect route needs only `path` + `redirect`; an index route uses an
+> empty `path`. Otherwise `path` and `component` are required.
 
 > Note: attribute names are lowercase/kebab-case (`resource-url`, not
 > `resourceUrl`) because HTML lowercases attribute names.
@@ -86,8 +94,10 @@ Declare routes as direct children of `<wc-router>`, and place a single
 
   <wc-route path="/" title="Home" component="wc-home"></wc-route>
   <wc-route path="/about" title="About Us" component="wc-about"></wc-route>
-  <wc-route path="/users" title="Users" component="wc-users"></wc-route>
-  <wc-route path="/users/:id" title="User Details" component="wc-userdetails"></wc-route>
+  <wc-route path="/users" title="Users" component="wc-users">
+    <wc-route path="" component="wc-userindex"></wc-route>
+    <wc-route path=":id" title="User Details" component="wc-userdetails"></wc-route>
+  </wc-route>
   <wc-route path="*" title="404" component="wc-notfound"></wc-route>
 
   <wc-outlet></wc-outlet>
@@ -139,6 +149,56 @@ connectedCallback() {
   // ...look up and render the user
 }
 ```
+
+## Nested routes
+
+Nest `<wc-route>` elements to share a layout between related routes. A child's
+`path` is **relative** to its parent (parent `/users` + child `:id` matches
+`/users/:id`), and the parent's component renders a `<wc-outlet>` where the
+matched child mounts. The layout stays put while only the nested view changes:
+
+```html
+<wc-route path="/users" component="wc-users">
+  <wc-route path="" component="wc-userindex"></wc-route>
+  <wc-route path=":id" component="wc-userdetails"></wc-route>
+</wc-route>
+```
+
+The layout component must render its own `<wc-outlet>`:
+
+```js
+// wc-users
+connectedCallback() {
+  // ...render the user list...
+  this.appendChild(document.createElement("wc-outlet"));
+}
+```
+
+Routing matches the deepest route and renders the whole chain outermost-first:
+each component goes into the previous one's `<wc-outlet>`. Captured params
+accumulate down the chain and are set as attributes on each level's component.
+
+### Index routes
+
+A child with an **empty (or omitted) `path`** is the *index* route — it renders
+into the layout for the parent's exact path. Above, `/users` renders
+`<wc-users>` with `<wc-userindex>` in its outlet, while `/users/2` swaps in
+`<wc-userdetails id="2">`.
+
+## Redirects
+
+Give a route a `redirect` attribute to send navigation elsewhere instead of
+rendering. The router resolves redirects before touching the DOM and uses
+`history.replaceState`, so the redirect source never lands in the history stack
+(Back works as expected). Redirect routes need no `component`:
+
+```html
+<wc-route path="/misc" redirect="/about"></wc-route>
+```
+
+This also works as a default for a nested section — point a parent (or its
+index child) at a concrete child path. Redirect chains are followed and capped
+(a loop is reported via `console.error` rather than hanging).
 
 ## Lazy loading routes
 
@@ -242,10 +302,12 @@ npm install
 npm test
 ```
 
-- `test/match.test.js` — URL matching: static, dynamic, encoded, and wildcard
-  paths plus edge cases.
-- `test/navigation.test.js` — mounting, navigating, dynamic params, the
-  `route-changed` event, and `data-prefetch` warming the lazy-route cache.
+- `test/match.test.js` — `match()` and `matchRoutes()`: static, dynamic,
+  encoded, and wildcard paths, nested chains, index children, and accumulated
+  params, plus edge cases.
+- `test/navigation.test.js` — mounting, navigating, nested + index rendering,
+  redirects (and loop detection), the `route-changed` event, and
+  `data-prefetch` warming the lazy-route cache.
 
 ## Notes / differences from the guide
 
@@ -266,9 +328,8 @@ few issues found in its code listings:
 ## Limitations
 
 This is a learning-oriented router. It intentionally does **not** support
-nested routes, redirects, route guards, query-string parsing, or scroll
-restoration. For production use, prefer a battle-tested library. The URL
-matcher in `util.js` is adapted from
+route guards, query-string parsing, or scroll restoration. For production use,
+prefer a battle-tested library. The URL matcher in `util.js` is adapted from
 [Reach Router](https://github.com/reach/router); libraries like
 [`path-to-regexp`](https://github.com/pillarjs/path-to-regexp) handle the
 trickier matching cases.
